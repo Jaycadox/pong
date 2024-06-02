@@ -98,6 +98,12 @@ const Ball = struct {
     }
 };
 
+const Action = enum {
+    up,
+    down,
+    powerup,
+};
+
 const Player = struct {
     position: rm.Vector2,
     score: u32,
@@ -123,30 +129,68 @@ const Player = struct {
         };
     }
 
-    pub fn handle_inputs(self: *Player) void {
-        if (r.IsKeyDown(self.down_key)) {
-            self.position.y += 8;
+    fn perform_action(self: *Player, action: Action, ball: *Ball, sounds: *SoundDirectory) void {
+        if (action == Action.up or action == Action.down) {
+            if (action == Action.up) {
+                self.position.y -= 8;
+            } else if (action == Action.down) {
+                self.position.y += 8;
+            }
+
+            // Handle cases where player is attempting to go over or under play area
+            if (self.position.y < 0.0) {
+                self.position.y = 0.0;
+            }
+            const screen_height = @as(f32, @floatFromInt(r.GetScreenHeight()));
+            if (self.position.y + 80.0 > screen_height) {
+                self.position.y = screen_height - 80.0;
+            }
+        } else if (action == Action.powerup) {
+            self.handle_powerup(ball, sounds);
         }
 
+    }
 
-        if (r.IsKeyDown(self.up_key)) {
-            self.position.y -= 8;
+    fn ai_tick(self: *Player, ball: *Ball, sounds: *SoundDirectory) void {
+        const visualY = self.position.y + 40.0;
+
+        if (@abs(ball.position.y - visualY) >= 40.0) {
+            if (ball.position.y > visualY) {
+                self.perform_action(Action.down, ball, sounds);
+            } else if (ball.position.y < visualY) {
+                self.perform_action(Action.up, ball, sounds);
+            }
         }
 
-        if (self.position.y < 0.0) {
-            self.position.y = 0.0;
-        }
-
-        const screen_height = @as(f32, @floatFromInt(r.GetScreenHeight()));
-        if (self.position.y + 80.0 > screen_height) {
-            self.position.y = screen_height - 80.0;
+        if (self.has_powerup and @abs(ball.position.x - self.position.x) <= 20.0) {
+            self.perform_action(Action.powerup, ball, sounds);
         }
     }
 
-    pub fn handle_powerup(self: *Player, ball: *Ball, sounds: *SoundDirectory) void {
+    pub fn tick(self: *Player, ball: *Ball, sounds: *SoundDirectory) void {
+        if (r.IsKeyDown(self.down_key)) {
+            self.perform_action(Action.down, ball, sounds);
+            self.ai = false;
+        }
+
+        if (r.IsKeyDown(self.up_key)) {
+            self.perform_action(Action.up, ball, sounds);
+            self.ai = false;
+        }
+
+        if (r.IsKeyDown(self.powerup_key)) {
+            self.perform_action(Action.powerup, ball, sounds);
+            self.ai = false;
+        }
+
+        if (self.ai) {
+            self.ai_tick(ball, sounds);
+        }
         self.visual_offset *= 0.9;
+    }
+
+    pub fn handle_powerup(self: *Player, ball: *Ball, sounds: *SoundDirectory) void {
         if (!self.has_powerup) return;
-        if (!r.IsKeyDown(self.powerup_key)) return;
 
         self.has_powerup = false;
         const visualSelf = rm.Vector2Add(self.position, rm.Vector2 { .x = 0.0, .y = 40.0 });
@@ -199,7 +243,7 @@ pub fn main() !void {
     defer r.UnloadSound(sounds.death);
 
     var playerOne = Player.init(30, r.KEY_W, r.KEY_S, r.KEY_D, false);
-    var playerTwo = Player.init(@floatFromInt(r.GetScreenWidth() - 30), r.KEY_UP, r.KEY_DOWN, r.KEY_LEFT, false);
+    var playerTwo = Player.init(@floatFromInt(r.GetScreenWidth() - 30), r.KEY_UP, r.KEY_DOWN, r.KEY_LEFT, true);
 
     const players = &[_] *Player {&playerOne, &playerTwo};
 
@@ -233,7 +277,11 @@ pub fn main() !void {
         var count: u32 = 0;
         for (players) |player| {
             count += 1;
-            _ = try std.fmt.allocPrint(alloc, "{}", .{player.score});
+            if (player.ai) {
+                _ = try std.fmt.allocPrint(alloc, "{} (Bot)", .{player.score});
+            } else {
+                _ = try std.fmt.allocPrint(alloc, "{}", .{player.score});
+            }
             if (count != players.len) {
                 const byte = try alloc.create(u8);
                 byte.* = ':';
@@ -257,8 +305,7 @@ pub fn main() !void {
         }
 
         for (players) |player| {
-            player.handle_inputs();
-            player.handle_powerup(&ball, &sounds);
+            player.tick(&ball, &sounds);
         }
 
         ball.handle_movement(players, &sounds);
