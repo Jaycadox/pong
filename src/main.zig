@@ -317,7 +317,7 @@ pub fn main() !void {
         ball.render();
     }
 
-    try bw.flush(); // don't forget to flush!
+    try bw.flush();
 }
 
 fn drawTextCentered(text: [*c]u8, x: i32, y: i32, size: i32, color: r.Color) void {
