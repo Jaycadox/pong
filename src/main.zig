@@ -106,6 +106,22 @@ const Player = struct {
     powerup_key: c_int,
     has_powerup: bool,
     visual_offset: f32,
+    ai: bool,
+    pub fn init(pos_x: f32, up_key: c_int, down_key: c_int, powerup_key: c_int, ai: bool) Player {
+        return Player {
+            .position = rm.Vector2 {
+                .x = pos_x,
+                .y = 30.0
+            },
+            .score = 0,
+            .up_key = up_key,
+            .down_key = down_key,
+            .powerup_key = powerup_key,
+            .has_powerup = false,
+            .visual_offset = 0.0,
+            .ai = ai,
+        };
+    }
 
     pub fn handle_inputs(self: *Player) void {
         if (r.IsKeyDown(self.down_key)) {
@@ -170,6 +186,7 @@ pub fn main() !void {
     try stdout.print("Pong -- made in Zig.\n", .{});
     r.InitWindow(800, 800, "Pong");
     r.InitAudioDevice();
+    defer r.CloseAudioDevice();
     while (!r.IsAudioDeviceReady()) {}
 
     var sounds = SoundDirectory {
@@ -177,33 +194,12 @@ pub fn main() !void {
         .ballHit = r.LoadSoundFromWave(r.LoadWaveFromMemory(".wav", ballHit, ballHit.len)),
         .death = r.LoadSoundFromWave(r.LoadWaveFromMemory(".wav", death, death.len)),
     };
+    defer r.UnloadSound(sounds.powerUp);
+    defer r.UnloadSound(sounds.ballHit);
+    defer r.UnloadSound(sounds.death);
 
-    var playerOne = Player {
-        .position = rm.Vector2 {
-            .x = 30,
-            .y = 30,
-        },
-        .score = 0,
-        .up_key = r.KEY_W,
-        .down_key = r.KEY_S,
-        .powerup_key = r.KEY_D,
-        .has_powerup = false,
-        .visual_offset = 0.0,
-    };
-
-
-    var playerTwo = Player {
-        .position = rm.Vector2 {
-            .x = @floatFromInt(r.GetScreenWidth() - 30),
-            .y = 30,
-        },
-        .score = 0,
-        .up_key = r.KEY_UP,
-        .down_key = r.KEY_DOWN,
-        .powerup_key = r.KEY_LEFT,
-        .has_powerup = false,
-        .visual_offset = 0.0,
-    };
+    var playerOne = Player.init(30, r.KEY_W, r.KEY_S, r.KEY_D, false);
+    var playerTwo = Player.init(@floatFromInt(r.GetScreenWidth() - 30), r.KEY_UP, r.KEY_DOWN, r.KEY_LEFT, false);
 
     const players = &[_] *Player {&playerOne, &playerTwo};
 
