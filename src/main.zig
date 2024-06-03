@@ -2,6 +2,9 @@ const std = @import("std");
 const r = @cImport({
     @cInclude("raylib.h");
 });
+const rg = @cImport({
+    @cInclude("raygui.h");
+});
 const rm = @cImport({
     @cInclude("raymath.h");
 });
@@ -86,11 +89,18 @@ const Ball = struct {
             self.has_power = false;
 
             // Reset ball velocity
-            // TODO: perhaps randomize this?
+            const flip_x = std.crypto.random.boolean();
+            const flip_y = std.crypto.random.boolean();
             self.velocity = rm.Vector2 {
-                .x = -3.0,
-                .y = -3.0,
+                .x = 3.0,
+                .y = 3.5,
             };
+            if (flip_x) {
+                self.velocity.x *= -1;
+            }
+            if (flip_y) {
+                self.velocity.y *= -1;
+            }
 
             // Teleport ball to centre screen
             self.position = rm.Vector2 {
@@ -99,12 +109,75 @@ const Ball = struct {
             };
         }
     }
+
+    fn predict(self: *Ball, right_side: bool, left_side: bool) ?f32 {
+        var velocity = self.velocity;
+        var position = self.position;
+        var tries: u8 = 0;
+        while (tries < 64) {
+            const left: bool = velocity.x < 0.0;
+            const top: bool = velocity.y < 0.0;
+            if (top) {
+                // Top wall
+                const adjacent: f32 = -velocity.y;
+                const opposite: f32 = velocity.x;
+                const scaleFactor: f32 = position.y / adjacent;
+                const newPosition = rm.Vector2 {
+                    .x = position.x + opposite * scaleFactor,
+                    .y = 0.0,
+                };
+                if (newPosition.x > 0.0 and newPosition.x <= @as(f32, @floatFromInt(r.GetScreenWidth()))) {
+                    position = newPosition;
+                    velocity.y *= -1;
+                }
+            }
+            if (!top) {
+                // Bottom wall
+                const adjacent: f32 = velocity.y;
+                const opposite: f32 = velocity.x;
+                const scaleFactor: f32 = (@as(f32, @floatFromInt(r.GetScreenHeight())) - position.y) / adjacent;
+                const newPosition = rm.Vector2 {
+                    .x = position.x + opposite * scaleFactor,
+                    .y = @floatFromInt(r.GetScreenHeight()),
+                };
+                if (newPosition.x > 0.0 and newPosition.x <= @as(f32, @floatFromInt(r.GetScreenWidth()))) {
+                    position = newPosition;
+                    velocity.y *= -1;
+                }
+            }
+            if (left) {
+                // Left wall
+                const adjacent: f32 = -velocity.y;
+                const opposite: f32 = velocity.x;
+                const scaleFactor: f32 = (position.x - 30.0) / opposite;
+                if (left_side) {
+                    return position.y + adjacent * scaleFactor;
+                }
+                break;
+            }
+            if (!left) {
+                // Right wall
+                const adjacent: f32 = velocity.y;
+                const opposite: f32 = velocity.x;
+                const pos = @as(f32, @floatFromInt(r.GetScreenWidth())) - 30.0;
+                const scaleFactor: f32 = (pos - position.x) / opposite;
+                if (right_side) {
+                    return position.y + adjacent * scaleFactor;
+                }
+                break;
+            }
+            tries += 1;
+        }
+        return null;
+    }
+
     pub fn render(self: *Ball) void {
         // Balls with active powerups are drawn yellow
         var colour = r.WHITE;
         if (self.has_power) {
             colour = r.YELLOW;
         }
+
         r.DrawCircle(@intFromFloat(self.position.x), @intFromFloat(self.position.y), 10.0, colour);
     }
 };
@@ -115,6 +188,12 @@ const Action = enum {
     powerup,
 };
 
+const BotMode = enum {
+    on,
+    off,
+    dumb,
+};
+
 const Player = struct {
     position: rm.Vector2,
     score: u32,
@@ -123,8 +202,8 @@ const Player = struct {
     powerup_key: c_int,
     has_powerup: bool,
     visual_offset: f32,
-    ai: bool,
-    pub fn init(pos_x: f32, up_key: c_int, down_key: c_int, powerup_key: c_int, ai: bool) Player {
+    ai: BotMode,
+    pub fn init(pos_x: f32, up_key: c_int, down_key: c_int, powerup_key: c_int, ai: BotMode) Player {
         return Player {
             .position = rm.Vector2 {
                 .x = pos_x,
@@ -164,13 +243,21 @@ const Player = struct {
 
     fn ai_tick(self: *Player, ball: *Ball, sounds: *SoundDirectory) void {
         const visualY = self.position.y + 40.0;
+        const onLeft = self.position.x < ( @as(f32, @floatFromInt(r.GetScreenWidth())) / 2.0 );
+        var target = ball.position.y; // If we're dumb, we'll just follow where the ball is
+        if (self.ai != BotMode.dumb) {
+            target = (@as(f32, @floatFromInt(r.GetScreenHeight())) - 40.0) / 2.0; // If we can't predict, go to centre screen
+            if (ball.predict(!onLeft, onLeft)) |new_target_y| {
+                target = new_target_y;
+            }
+        }
 
         // Check if the ball is somewhat far
-        if (@abs(ball.position.y - visualY) >= 40.0) {
+        if (@abs(target - visualY) >= 10.0) {
             // If it's above me, go up, if it's below me, go down
-            if (ball.position.y > visualY) {
+            if (target > visualY) {
                 self.perform_action(Action.down, ball, sounds);
-            } else if (ball.position.y < visualY) {
+            } else if (target < visualY) {
                 self.perform_action(Action.up, ball, sounds);
             }
         }
@@ -186,25 +273,25 @@ const Player = struct {
 
         if (r.IsKeyDown(self.down_key)) {
             self.perform_action(Action.down, ball, sounds);
-            self.ai = false;
+            self.ai = BotMode.off;
         }
 
         if (r.IsKeyDown(self.up_key)) {
             self.perform_action(Action.up, ball, sounds);
-            self.ai = false;
+            self.ai = BotMode.off;
         }
 
         if (r.IsKeyDown(self.powerup_key)) {
             self.perform_action(Action.powerup, ball, sounds);
-            self.ai = false;
+            self.ai = BotMode.off;
         }
 
-        if (self.ai) {
+        if (self.ai != BotMode.off) {
             self.ai_tick(ball, sounds);
         }
 
         // The powerup specifies a visual offset to denote its operation, this needs to be decreased every subsequent frame
-        self.visual_offset *= 0.9;
+        self.visual_offset *= 0.95;
     }
 
     pub fn handle_powerup(self: *Player, ball: *Ball, sounds: *SoundDirectory) void {
@@ -218,10 +305,10 @@ const Player = struct {
 
         // Minimum threshold for distance between player and ball for powerup to activate
         const dist = rm.Vector2Distance(visualSelf, ball.position);
-        if (dist < 240.0) {
+        if (dist < 140.0) {
             const between = rm.Vector2Subtract(ball.position, visualSelf);
             const betweenNormalized = rm.Vector2Normalize(between);
-            const betweenScaled = rm.Vector2Scale(betweenNormalized, ((240.0 - dist) / 80.0) * rm.Vector2Length(ball.velocity));
+            const betweenScaled = rm.Vector2Scale(betweenNormalized, ((140.0 - dist) / 15.0) + @min(60.0, rm.Vector2Length(ball.velocity)));
             ball.velocity = betweenScaled;
             ball.has_power = true;
         }
@@ -257,7 +344,7 @@ fn fillScoreCard(buffer: []u8, players:  []const* Player) !void {
     // For every player, write (allocate) their score to the buffer, as well as a colon
     for (players) |player| {
         count += 1;
-        if (player.ai) {
+        if (player.ai != BotMode.off) {
             _ = try std.fmt.allocPrint(alloc, "{} (Bot)", .{player.score});
         } else {
             _ = try std.fmt.allocPrint(alloc, "{}", .{player.score});
@@ -319,8 +406,8 @@ pub fn main() !void {
     defer r.UnloadSound(sounds.death);
 
     // Initialize players
-    var playerOne = Player.init(30, r.KEY_W, r.KEY_S, r.KEY_D, false);
-    var playerTwo = Player.init(@floatFromInt(r.GetScreenWidth() - 30), r.KEY_UP, r.KEY_DOWN, r.KEY_LEFT, true);
+    var playerOne = Player.init(30, r.KEY_W, r.KEY_S, r.KEY_D, BotMode.on);
+    var playerTwo = Player.init(@floatFromInt(r.GetScreenWidth() - 30), r.KEY_UP, r.KEY_DOWN, r.KEY_LEFT, BotMode.on);
     const players = &[_] *Player {&playerOne, &playerTwo};
 
     // Initialize ball
@@ -331,10 +418,12 @@ pub fn main() !void {
         },
         .velocity = rm.Vector2 {
             .x = -3.0,
-            .y = -3.0,
+            .y = -3.5,
         },
         .has_power = false,
     };
+
+    var show_settings = false;
 
     while (!r.WindowShouldClose()) {
         r.BeginDrawing();
@@ -362,6 +451,37 @@ pub fn main() !void {
         }
 
         ball.render();
+        if (r.IsKeyPressed(r.KEY_F1)) {
+            show_settings = !show_settings;
+        }
+        if (show_settings) {
+            _ = rg.GuiWindowBox(rg.Rectangle {
+                .height = @floatFromInt(r.GetScreenHeight()),
+                .width = @floatFromInt(r.GetScreenWidth()),
+                .x = 0,
+                .y = 0,
+                }, "Pong -- settings");
+            var cursor_y: f32 = 30.0;
+
+            var player_count: u8 = 0;
+            for (players) |player| {
+                player_count += 1;
+                _ = rg.GuiLabel(rg.Rectangle { .x = 0, .y = cursor_y, .width = 100, .height = 10, }, "Player");
+                cursor_y += 20.0;
+                if (rg.GuiButton(rg.Rectangle {.x = 20, .y = cursor_y, .width = 100, .height = 30}, "Become smart bot") == 1) {
+                    player.ai = BotMode.on;
+                }
+                cursor_y += 40.0;
+                if (rg.GuiButton(rg.Rectangle {.x = 20, .y = cursor_y, .width = 100, .height = 30}, "Become dumb bot") == 1) {
+                    player.ai = BotMode.dumb;
+                }
+                cursor_y += 40.0;
+                if (rg.GuiButton(rg.Rectangle {.x = 20, .y = cursor_y, .width = 100, .height = 30}, "Disable bot") == 1) {
+                    player.ai = BotMode.off;
+                }
+                cursor_y += 40.0;
+            }
+        }
     }
 
     try bw.flush();

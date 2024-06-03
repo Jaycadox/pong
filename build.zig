@@ -13,7 +13,9 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
-    const r = raylib.addRaylib(b, target, optimize, .{}) catch unreachable;
+    const r = raylib.addRaylib(b, target, optimize, .{
+        .raygui = true
+    }) catch unreachable;
     exe.addIncludePath(.{ .path = "raylib/src" });
     exe.linkLibrary(r);
 
